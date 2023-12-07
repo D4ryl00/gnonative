@@ -83,6 +83,7 @@ _api.clean.protocol:
 	rm -f service/rpc/rpcconnect/*.connect.go
 	rm -f $(TEMPLATE_PROJECT)/src/api/*.{ts,js}
 	rm -f $(TEMPLATE_PROJECT)/ios/Sources/rpc/*.{grpc,pb}.swift
+	rm -f $(TEMPLATE_PROJECT)/android/app/src/main/java/land/gno/gnomobile/v1/*.java
 	rm -f $(gen_sum)
 
 $(gen_sum): $(gen_src)
