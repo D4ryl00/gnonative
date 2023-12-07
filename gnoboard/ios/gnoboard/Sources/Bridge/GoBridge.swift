@@ -1,6 +1,8 @@
 import Foundation
 import os
 import GnoCore
+import GRPC
+import NIO
 
 @available(iOS 14.0, *)
 @objc(GoBridge)
@@ -10,6 +12,10 @@ class GoBridge: NSObject {
   let tmpDir: String
   var bridge: GnoGnomobileBridge?
   var socketPort: Int = 0
+
+  var eventLoopGroup: EventLoopGroup?
+  var channel: GRPCChannel?
+  var client: Land_Gno_Gnomobile_V1_GnomobileServiceAsyncClient?
   
   static func requiresMainQueueSetup() -> Bool {
     return false
@@ -31,6 +37,11 @@ class GoBridge: NSObject {
       if self.bridge != nil {
         try self.bridge?.close()
         self.bridge = nil
+        
+        // Close the gRPC connection
+        try! self.channel?.close().wait()
+        
+        try! self.eventLoopGroup?.syncShutdownGracefully()
       }
     } catch let error as NSError {
       self.logger.error("\(String(describing: error.code))")
@@ -66,16 +77,56 @@ class GoBridge: NSObject {
       config.rootDir = self.appRootDir
       config.tmpDir = self.tmpDir
 
+      // On simulator we can't create an UDS, see comment below
+      #if targetEnvironment(simulator)
       config.useTcpListener = true
+      config.disableUdsListener = true
+      #endif
 
       let bridge = GnoGnomobileNewBridge(config, &err);
       if err != nil {
         throw err!
       }
       self.bridge = bridge
+      
+      // init the gRPC client
 
+      /*
+      ** On iOS simulator, temporary directory's absolute path exceeds
+      ** the length limit for Unix Domain Socket, since simulator is
+      ** only used for debug, we can safely fallback over TCP
+      */
+      #if !targetEnvironment(simulator)
+      let socketPath = bridge!.getUDSPath()
+      self.logger.info("gRPC server socket path: \(socketPath)")
+      let target: ConnectionTarget = .unixDomainSocket(socketPath)
+      #else
       self.socketPort = bridge!.getTcpPort()
       self.logger.info("gRPC server port: \(self.socketPort)")
+      let target: ConnectionTarget = .host("localhost", port: self.socketPort)
+      #endif
+      
+      // init the gPRC client
+      
+      // With React Native, we have to use MultiThreadedEventLoopGroup
+      // instead of PlatformSupport.makeEventLoopGroup
+      self.eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+      
+      // Configure the channel, we're not using TLS so the connection is `insecure`.
+      self.channel = try GRPCChannelPool.with(
+        target: target,
+        transportSecurity: .plaintext,
+        eventLoopGroup: self.eventLoopGroup!
+      )
+      
+      self.client = Land_Gno_Gnomobile_V1_GnomobileServiceAsyncClient(channel: self.channel!)
+      
+      // example gRPC call
+      Task {
+        let greeting = try await self.hello("gno")
+        self.logger.info("hello() returns: \(greeting)")
+      }
+      
       
       resolve(true)
     } catch let error as NSError {
@@ -100,9 +151,29 @@ class GoBridge: NSObject {
       if self.bridge != nil {
         try self.bridge?.close()
         self.bridge = nil
+        
+        // Close the gRPC connection
+        try! self.channel?.close().wait()
+        
+        try! self.eventLoopGroup?.syncShutdownGracefully()
       }
     } catch let error as NSError {
       self.logger.error("\(String(describing: error.code))")
     }
+  }
+  
+  func hello(_ name: String) async throws -> String {
+      guard self.client != nil else {
+        throw NSError(domain: "land.gno.gnomobile", code: 2, userInfo: [NSLocalizedDescriptionKey : "gRPC client not init"])
+      }
+    
+        var greeting: Land_Gno_Gnomobile_V1_HelloResponse?;
+        
+        let req = Land_Gno_Gnomobile_V1_HelloRequest.with {
+          $0.name = name
+        }
+        
+        greeting = try await client!.hello(req)
+        return greeting?.greeting ?? "unknown"
   }
 }

@@ -82,6 +82,7 @@ _api.clean.protocol:
 	rm -f service/rpc/*.pb.go
 	rm -f service/rpc/rpcconnect/*.connect.go
 	rm -f $(TEMPLATE_PROJECT)/src/api/*.{ts,js}
+	rm -f $(TEMPLATE_PROJECT)/ios/Sources/rpc/*.{grpc,pb}.swift
 	rm -f $(gen_sum)
 
 $(gen_sum): $(gen_src)
