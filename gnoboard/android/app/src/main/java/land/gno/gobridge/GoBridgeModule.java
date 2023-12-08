@@ -13,8 +13,11 @@ import gnolang.gno.gnomobile.BridgeConfig;
 
 import io.grpc.Channel;
 import android.net.LocalSocketAddress.Namespace;
+import android.util.Log;
 
+import io.grpc.StatusRuntimeException;
 import land.gno.gnomobile.v1.GnomobileServiceGrpc;
+import land.gno.gnomobile.v1.Gnomobiletypes;
 import land.gno.udschannel.UdsChannelBuilder;
 
 public class GoBridgeModule extends ReactContextBaseJavaModule {
@@ -51,16 +54,20 @@ public class GoBridgeModule extends ReactContextBaseJavaModule {
             }
 
             config.setRootDir(rootDir.getAbsolutePath());
+
+            // UDS is used by default, use also TCP
             config.setUseTcpListener(true);
-            config.setUseUdsListener(true);
 
             bridgeGnomobile = Gnomobile.newBridge(config);
 
-            socketPath = bridgeGnomobile.getSocketPath();
+            socketPath = bridgeGnomobile.getUDSPath();
             socketPort = (int)bridgeGnomobile.getTcpPort();
 
             Channel channel = UdsChannelBuilder.forPath(socketPath, Namespace.FILESYSTEM).build();
             blockingStub = GnomobileServiceGrpc.newBlockingStub(channel);
+
+            // example call
+            Log.i(TAG, String.format("hello() returs: %s", hello("gno")));
 
             promise.resolve(true);
         } catch (Exception err) {
@@ -95,5 +102,19 @@ public class GoBridgeModule extends ReactContextBaseJavaModule {
         try {
         } catch (Exception e) {
         }
+    }
+
+    public String hello(String name) {
+        Gnomobiletypes.HelloRequest request = Gnomobiletypes.HelloRequest.newBuilder().setName(name).build();
+        Gnomobiletypes.HelloResponse response;
+
+        try {
+            response = blockingStub.hello(request);
+        } catch (StatusRuntimeException e) {
+            Log.d(TAG, String.format("RPC listKeyInfo failed: {%s}", e.getStatus()));
+            return "unknown";
+        }
+
+        return response.getGreeting();
     }
 }
