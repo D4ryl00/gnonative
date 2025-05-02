@@ -250,7 +250,7 @@ func (s *gnoNativeService) SetPassword(ctx context.Context, req *connect.Request
 func (s *gnoNativeService) RotatePassword(ctx context.Context, req *connect.Request[api_gen.RotatePasswordRequest]) (*connect.Response[api_gen.RotatePasswordResponse], error) {
 	// Get all the signers, before trying to update the password.
 	signers := make([]*gnoclient.SignerFromKeybase, len(req.Msg.Addresses))
-	for i := range len(req.Msg.Addresses) {
+	for i := range req.Msg.Addresses {
 		var err error
 		if signers[i], err = s.getSigner(req.Msg.Addresses[i]); err != nil {
 			return nil, err
@@ -260,10 +260,10 @@ func (s *gnoNativeService) RotatePassword(ctx context.Context, req *connect.Requ
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	getNewPassword := func() (string, error) { return req.Msg.NewPassword, nil }
-	for i := range len(req.Msg.Addresses) {
+	for i := range req.Msg.Addresses {
 		if err := s.keybase.Rotate(signers[i].Account, signers[i].Password, getNewPassword); err != nil {
 			// Roll back the passwords. Don't check the error from Rotate.
-			for j := range i {
+			for j := 0; j < i; j++ {
 				getOldPassword := func() (string, error) { return signers[j].Password, nil }
 				s.keybase.Rotate(signers[j].Account, req.Msg.NewPassword, getOldPassword)
 			}
@@ -272,7 +272,7 @@ func (s *gnoNativeService) RotatePassword(ctx context.Context, req *connect.Requ
 	}
 
 	// Success. Update the Password in all the signers.
-	for i := range len(req.Msg.Addresses) {
+	for i := range req.Msg.Addresses {
 		signers[i].Password = req.Msg.NewPassword
 	}
 

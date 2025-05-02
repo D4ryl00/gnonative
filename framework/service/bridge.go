@@ -23,6 +23,7 @@ type BridgeConfig struct {
 	TmpDir             string
 	UseTcpListener     bool
 	DisableUdsListener bool
+	SecureStorage      SecureNativeStorage
 }
 
 func NewBridgeConfig() *BridgeConfig {
@@ -66,6 +67,7 @@ func NewBridge(config *BridgeConfig) (*Bridge, error) {
 		svcOpts = append(svcOpts,
 			service.WithRootDir(config.RootDir),
 			service.WithTmpDir(config.TmpDir),
+			service.WithSecureNativeStorage(config.SecureStorage),
 		)
 
 		if config.UseTcpListener {

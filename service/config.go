@@ -9,9 +9,11 @@ import (
 	"go.uber.org/zap"
 )
 
-const DEFAULT_TCP_ADDR = ":26658"
-const DEFAULT_SOCKET_SUBDIR = "s"
-const DEFAULT_SOCKET_FILE = "gno"
+const (
+	DEFAULT_TCP_ADDR      = ":26658"
+	DEFAULT_SOCKET_SUBDIR = "s"
+	DEFAULT_SOCKET_FILE   = "gno"
+)
 
 // Config describes a set of settings for a GnoNativeService
 type Config struct {
@@ -24,6 +26,7 @@ type Config struct {
 	UdsPath            string
 	UseTcpListener     bool
 	DisableUdsListener bool
+	Storage            SecureNativeStorage
 }
 
 type GnoNativeOption func(cfg *Config) error
@@ -307,6 +310,16 @@ var WithFallbackUdsPath GnoNativeOption = func(cfg *Config) error {
 		return fallbackUdsPath.opt(cfg)
 	}
 	return nil
+}
+
+// --- SecureNativeStoreage options ---
+
+// WithSecureNativeStorage sets the secure native storage implementation.
+var WithSecureNativeStorage = func(storage SecureNativeStorage) GnoNativeOption {
+	return func(cfg *Config) error {
+		cfg.Storage = storage
+		return nil
+	}
 }
 
 // --- listener options ---
