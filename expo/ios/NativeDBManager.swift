@@ -20,6 +20,15 @@ public class NativeDBManager: NSObject, GnoGnonativeNativeDBProtocol {
     init(service: String = Bundle.main.bundleIdentifier ?? "GnoNativeService", accessGroup: String? = nil) {
         self.service = service
         self.accessGroup = accessGroup
+        
+        super.init()
+        
+        // Detect reinstall & purge leftover keychain, but never crash init.
+        do {
+            try self.handleAppUninstallation()
+        } catch {
+            print("Install guard failed: \(error)")
+        }
     }
     
     // MARK: - Public Interface Implementation
@@ -298,6 +307,121 @@ public class NativeDBManager: NSObject, GnoGnonativeNativeDBProtocol {
         if let s = start, lt(k, s) { return false }    // k >= s
         if let e = end, !lt(k, e) { return false }     // k < e
         return true
+    }
+    
+    // MARK: - Reinstall detection & purge
+    
+    private enum InstallGuard {
+        static let defaultsKey = "gnonative.install.guard.token"
+        static let kcAccount   = "__token__"       // dedicated account to avoid touching app data
+        // use a distinct service so we can purge app data without deleting the guard itself prematurely
+        static func guardService(for baseService: String) -> String { baseService + ".__install_guard__" }
+    }
+    
+    private func handleAppUninstallation() throws {
+        let guardService = InstallGuard.guardService(for: self.service)
+        
+        let defaultsToken = UserDefaults.standard.string(forKey: InstallGuard.defaultsKey)
+        let keychainToken = try readKeychainToken(service: guardService,
+                                                  account: InstallGuard.kcAccount,
+                                                  accessGroup: self.accessGroup)
+        
+        switch (defaultsToken, keychainToken) {
+        case (nil, let kt?) :
+            // Reinstall detected: UserDefaults wiped, Keychain survived
+            try purgeServiceKeychain(accessGroup: self.accessGroup)
+            try deleteKeychainItem(service: guardService, account: InstallGuard.kcAccount, accessGroup: accessGroup)
+            let new = UUID().uuidString
+            UserDefaults.standard.set(new, forKey: InstallGuard.defaultsKey)
+            try saveKeychainToken(new, service: guardService, account: InstallGuard.kcAccount, accessGroup: accessGroup)
+            
+        case (let dt?, let kt?) where dt != kt:
+            // Mismatch (restore/tamper): treat as fresh start → purge and re-seed guard
+            try purgeServiceKeychain(accessGroup: self.accessGroup)
+            try deleteKeychainItem(service: guardService, account: InstallGuard.kcAccount, accessGroup: accessGroup)
+            UserDefaults.standard.set(dt, forKey: InstallGuard.defaultsKey)
+            try saveKeychainToken(dt, service: guardService, account: InstallGuard.kcAccount, accessGroup: accessGroup)
+            
+        case (nil, nil):
+            // First-ever launch on this device
+            let new = UUID().uuidString
+            UserDefaults.standard.set(new, forKey: InstallGuard.defaultsKey)
+            try saveKeychainToken(new, service: guardService, account: InstallGuard.kcAccount, accessGroup: accessGroup)
+            
+        default:
+            break // both exist and match → nothing to do
+        }
+    }
+    
+    private func saveKeychainToken(_ token: String, service: String, account: String, accessGroup: String?) throws {
+        var q: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecValueData as String: Data(token.utf8),
+            // ThisDeviceOnly avoids iCloud/backups keeping it after restore
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        ]
+        if let ag = accessGroup { q[kSecAttrAccessGroup as String] = ag }
+        SecItemDelete(q as CFDictionary)
+        let st = SecItemAdd(q as CFDictionary, nil)
+        guard st == errSecSuccess else { throw NativeDBError.keychainError(status: st, message: "Save guard token failed") }
+    }
+    
+    private func readKeychainToken(service: String, account: String, accessGroup: String?) throws -> String? {
+        var q: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        if let ag = accessGroup { q[kSecAttrAccessGroup as String] = ag }
+        
+        var item: CFTypeRef?
+        let st = SecItemCopyMatching(q as CFDictionary, &item)
+        if st == errSecItemNotFound { return nil }
+        guard st == errSecSuccess, let data = item as? Data, let s = String(data: data, encoding: .utf8) else {
+            throw NativeDBError.keychainError(status: st, message: "Read guard token failed")
+        }
+        return s
+    }
+    
+    private func deleteKeychainItem(service: String, account: String, accessGroup: String?) throws {
+        var q: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        if let ag = accessGroup { q[kSecAttrAccessGroup as String] = ag }
+        let st = SecItemDelete(q as CFDictionary)
+        if st != errSecSuccess && st != errSecItemNotFound {
+            throw NativeDBError.keychainError(status: st, message: "Delete guard token failed")
+        }
+    }
+    
+    /// Purge only items for this manager's service/access group.
+    private func purgeServiceKeychain(accessGroup: String?) throws {
+        func del(_ cls: CFString) throws {
+            var q: [String: Any] = [
+                kSecClass as String: cls,
+            ]
+            if let ag = accessGroup { q[kSecAttrAccessGroup as String] = ag }
+            let st = SecItemDelete(q as CFDictionary)
+            if st != errSecSuccess && st != errSecItemNotFound {
+                throw NativeDBError.keychainError(status: st, message: "Purge failed for class \(cls)")
+            }
+        }
+        
+        func attempt(_ f: () throws -> Void) {
+            do { try f() } catch { print(error) }
+        }
+        
+        attempt { try del(kSecClassGenericPassword) }
+        attempt { try del(kSecClassKey) }
+        attempt { try del(kSecAttrGeneric) }
+        attempt { try del(kSecAttrAccount) }
+        attempt { try del(kSecAttrService) }
     }
 }
 
